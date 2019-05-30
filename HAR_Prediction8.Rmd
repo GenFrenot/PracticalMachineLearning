@@ -1,0 +1,193 @@
+---
+title: "HAR Prediction"
+author: "Genevieve Frenot"
+date: "May 29, 2019"
+output: html_document
+---
+
+
+```{r initial cleanup, echo=FALSE}
+rm(list=ls()) # clear the environment
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)    # for the machine learning functionalities
+library("GGally") # for ggcor correlation plot (loading as well ggplot2)
+set.seed(233) # set the seed for reproducibility
+```
+
+## Executive Summary
+
+This human activity recognition exercise is based on data from Groupware@LES:
+http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har
+
+In this project, the goal is to use data from accelerometers on the belt, 
+forearm, arm, and dumbell of 6 participants which were asked to perform barbell 
+lifts correctly and incorrectly in 5 different ways. 
+
+Our strategy is to split the provided training data in two sets, one for
+learning and one for testing our model. Once reaching a satisfying accuracy,
+we would actually validate our model (and hopefully our project assignement) 
+by predicting the exercise classe on the provided test data.
+
+### Data Preparation
+Loading the provided training data
+```{r training data}
+data<-read.csv( # read directly from provided URL
+    "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+    ,header = TRUE
+    ,na.strings = c("NA","NaN","","#DIV/0!")) # mark as NA all invalid entries
+dim(data)
+```
+
+In the appendix you can see some basic data exploration on this provided training set.
+These 19622 records are a great amount of data sample that we will be able to split for cross validation.
+
+We are now loading the provided test data which we will use as a the final validation set for the project
+```{r validation data}
+validation<-read.csv(
+    "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+    , header = TRUE, na.strings = c("NA","NaN","","#DIV/0!"))
+dim(validation)
+```
+
+In the appendix you can see some basic data exploration on this provided testing set. These 20 records are the measures for 20 exercises for which we are going to predict the respective classes: A, B, C, D or E
+
+Splitting the provided training data into a training and testing data set for cross validation
+```{r splitting provided training data}
+inTrain <- createDataPartition(y=data$classe, p=0.75, list=FALSE)
+training<- data[inTrain,]
+testing <- data[-inTrain,]
+```
+
+Creating simplified data set for the prediction model
+```{r trainingPredictors}
+# removes the outcome 
+trainingPredictors<-training[,which(names(training)!="classe")] 
+# Remove columns 1 to 8 which are annotations
+trainingPredictors<-trainingPredictors[,-(1:8)] 
+# Look at the quantity of NA values in the predictors
+ratio.na<-function(v) { round(100*sum(is.na(v))/nrow(trainingPredictors)) }
+NAs <- sapply(trainingPredictors,ratio.na)
+table(NAs)
+```
+We can see that 51 predictor columns points are fully populated, 
+and that the others are 98% or 100% empty. As such variables could 
+biaise our analysis, we are removing these colunms from the predictors.
+```{r clear}
+trainingPredictors <- trainingPredictors[,names(NAs[NAs<98])] 
+```
+
+### Predictor Analysis
+Now let's look at the correlations between the variables of this cleaned set of predictors
+```{r correlations}
+ggcorr(cor(trainingPredictors), size=3, hjust = 1.1, layout.exp = 8
+       ,name="Correlation") 
+```
+
+*Correlation of all valid predictors for the Human Activity test data*
+
+We can see that a many variables are correlated and therefore decide
+to preprocess the data with Principal Component Analysis
+```{r preprocessing }
+preProc <- preProcess(trainingPredictors,method="pca",pcaComp=ncol(trainingPredictors))
+trainingPC <- predict(preProc,trainingPredictors)
+```
+
+Just because we are curious, we are visualizing the correlations of this new
+set of pre-processed predictors.
+```{r preprocessed data correlations}
+ggcorr(cor(trainingPC), size=3, hjust = 1.1, layout.exp = 8
+        ,name="Correlation") 
+```
+*Correlation of the pre-processed predictors for the Human Activity test data*
+
+We can see that these new predictors are nicely independant the ones from the others.
+
+### Building our Prediction Model
+With our the pre-processed predictors, we are now ready to build our prediction model.
+We choose to use Random Forest bootstraping, which takes some time to process 
+but is recognized for its accuracy 
+```{r modeling}
+modelFit <- train(x = trainingPC, y = training$classe,method="rf") 
+modelFit$results[modelFit$finalModel$mtry,] # result of the final model
+```
+
+The accuracy for this model is 96.7%, which is good to go. 
+In the appendix will find the full summary of this prediction model.
+
+Let's look in-depth at the final model:
+```{r model}
+modelFit$finalModel
+```
+
+We can see that the out of sample error is of 2.21%, which is satisfactory as well.
+
+
+### Cross Validation
+We are now trying our prediction model on the data that we stored separately as out test data 
+```{r testing}
+testingPredictors<-testing[,which(names(testing) %in% names(trainingPredictors))]
+testingPC <- predict(preProc,testingPredictors)
+confusionMatrix<-confusionMatrix(testing$classe,predict(modelFit,testingPC))
+confusionMatrix$overall[1]
+```
+
+The Overal Prediction Accuracy is 98,4%, which demonstrated that our prediction model is satisfactory.
+In the appendix will find the all details on this confusion matrix.
+
+See below a visualization of the prediction vs observations:
+```{r visualize the predicted vs observed values}
+qplot(testing$classe,predict(modelFit,testingPC)
+      , colour=classe, data=testing, geom = "jitter"
+      , xlab = "Observed Classe", ylab = "Predicted Classe")
+```
+
+*Predicted vs. observed in testing data*
+
+As the cross validation demonstrated that the prediction model is satisfactory, 
+we now can use the validation data. 
+
+### Final prediction on the validation data
+First pre-processing:
+```{r preprocess validation}
+validationPredictors<-validation[,which(names(validation) %in% names(trainingPredictors))]
+validationPC<-predict(preProc,validationPredictors)
+```
+
+Now predicting the outcomes based on the pre-processed data:
+```{r prediction}
+prediction<-predict(modelFit,validationPC)
+as.data.frame(prediction)
+```
+The 20 values above are our prediction to this current human activity recognition exercise.
+By submitting, we will get the final evaluation of its accuracy.
+
+
+
+# Appendix
+
+## Basic data exploration on the provided training set
+```{r provided training data exploration}
+dim(data)
+str(data[,1:12]) # look at the structure of the 10 first columns 
+str(data[,(ncol(data)-6):(ncol(data))]) # look at the 6 last columns
+```
+
+## Basic data exploration on the provided testing set
+```{r validation data exploration}
+dim(validation)
+str(data[,1:10]) # look at the structure of the 10 first columns 
+str(validation[,(ncol(data)-5):(ncol(data))]) # look at the 5 last columns
+```
+
+## Prediction model summary
+```{r  prediction model summary}
+modelFit
+```
+## Confusion matrix
+```{r  confusion summary}
+confusionMatrix
+```
+
